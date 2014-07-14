@@ -3,41 +3,115 @@ library(shiny)
 shinyUI(
 
     # Use a fluid Bootstrap layout
-    fluidPage(
+    navbarPage('Calibrating HPLC Output',
 
-        titlePanel('Conjugate Bayesian Inference for Normal Likelihood'),
+        tabPanel('Simulation', # =============================================
 
-        sidebarLayout(
+            sidebarLayout(
 
-            sidebarPanel(
+                sidebarPanel(
 
-                sliderInput('n.sample', h4('Number of Samples'),
-                            min = 0, max = 100, value = 0, step = 1,
-                            animate = animationOptions(interval = 500, loop = TRUE)),
+                    sliderInput('std', h5('Standard Deviation of Relative Error [%]:'),
+                                min = 1, max = 50, value = 5, step = 1),
 
-                textInput('mean', label = h4('Prior Mean'), value = 0),
+                    actionButton('resample', h5('Generate New Random Data')),
 
-                textInput('std', label = h4('Prior Standard Deviation'), value = 1),
+                    sliderInput('plot.range', h5('Select Plot Range:'),
+                                min = 0, max = 10, value = c(0, 10), step = 0.01)
+                ),
 
-                textInput('seed', label = h4('Random Seed'), value = pi),
+                # Create a spot for the barplot
+                mainPanel(
 
-                checkboxGroupInput('selectPlots', label = h4('Select Plots'),
-                                   choices = list('Likelihood' = 'Likelihood',
-                                                  'Posterior' = 'Posterior',
-                                                  'Sampling Distribution' = 'Sampling Distribution',
-                                                  'Empirical Sampling Distribution' = 'Empirical Sampling Distribution'),
-                                   selected = c('Posterior')),
+                    h3('Calibration Models:'),
 
-                sliderInput("plotRange", "Plot Range",
-                            min = -5, max = 5, step = .1, value = c(-3, 3))
+                    plotOutput('plot'),
 
-            ),
+                    h3('Explanation:'),
 
-            # Create a spot for the barplot
-            mainPanel(
-                plotOutput('plot')
+                    withMathJax(
+                        'The plots show two different models fitted to data that was
+                    generated from a linear model
+                        $$A_t = (ac_t + b)\\epsilon_t$$
+                    where $$\\epsilon_t\\sim\\mathcal{N}(1, \\sigma^2)$$
+                    The red model was fit with standard least squares, while the
+                    blue one used weighted least squares with weights proportional
+                    to c. Dotted lines indicate standard errors. Note that both
+                    models are wrong in the sense, that they allow negative
+                    values, however the blue model is far more realistic about the
+                    error margins in the lower part. This issue will be addressed by
+                    a third model.'),
+
+                    h3('Contact'),
+
+                    'kevinkunzmann(at)gmx.net'
+                )
+
             )
+        ), # /end tabPanel Simulation
 
-        )
+        tabPanel('Your Data', # ==============================================
+
+             sidebarLayout(
+
+                 sidebarPanel(
+
+                     fileInput('yourDataFileValidation',
+                               label = h5('Validation Data')),
+
+                     fileInput('yourDataFileCalibration',
+                               label = h5('Calibration Data')),
+
+                     hr(),
+
+                     uiOutput('selectX'),
+
+                     uiOutput('selectY')
+                ),
+
+                mainPanel(tabsetPanel(type = 'tabs',
+
+                    tabPanel('Validation',
+
+                        plotOutput('plotValidation'),
+
+                        wellPanel(
+                            uiOutput('selectPlotRangeValidation')
+                        ),
+
+                        h4('Power Law Exponent:'),
+
+                        textOutput('alpha'),
+
+                        'This value minimizes the correlation of absolute,
+                        standardized residuals with the indepentend variable
+                        (concentration).',
+
+                        h4('Scatterplot of Standardized Absolute Residuals:'),
+
+                        plotOutput('plotResidualsValidation')
+                    ),
+
+                    tabPanel('Calibration',
+
+                        plotOutput('plotCalibration'),
+
+                        wellPanel(
+                            uiOutput('selectPlotRangeCalibration')
+                        )
+                    ),
+
+                    tabPanel('Measure', # ====================================
+
+                        fileInput('yourDataFileMeasurements', label = 'Measurements [Y]'),
+
+                        tableOutput('view')
+                    )
+
+                )
+
+             ))
+
+        ) # /end Your Data
     )
 )

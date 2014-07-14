@@ -3,65 +3,283 @@ library(shiny)
 # Define a server for the Shiny app
 shinyServer(function(input, output) {
 
+    lmWeighted <- function(x, y, alpha) {
+        w <- 1/x**(2*alpha)
+        return(lm(y ~ x, data.frame(x = x, y = y), weights = w))
+    }
+
+    lmWeightedBounds <- function(x, model, alpha) {
+        sds   <- sd(model$residuals/model$fitted.values**alpha)*model$fitted.values
+        upper <- predict(model, x) + sds
+        lower <- predict(model, x) - sds
+        return(list(u = upper, l = lower))
+    }
+
+    m <- 1000
+    c <- 100
+    x <- c(.05, .1, .5, 1, 2, 5, 10)
+
+    err <- reactive({
+        input$resample
+        return(rnorm(length(x)))
+    })
+
+    values <- reactive({
+        err <- err()*input$std/100
+        y <- (m*x + c)*(1 + err)
+        return(list(err = err,
+                    y   = y))
+    })
+
     # Fill in the spot we created for a plot
     output$plot <- renderPlot({
 
-        n <- as.integer(input$n.sample)
-        mu <- as.numeric(input$mean)
-        s <- as.numeric(input$std)
+        y <- values()$y
 
-        set.seed(as.numeric(input$seed))
+        model1 <- lm(y ~ x, data.frame(x = x, y = y))
+        w <- 1/x**2
+        model2 <- lm(y ~ x, data.frame(x = x, y = y), weights = w)
 
-        observations <- rnorm(n)
+        xlim <- input$plot.range
 
-        x <- seq(input$plotRange[1], input$plotRange[2], length.out = 1000)
+        # y lims
+        ylim <- c(min(predict(model1, data.frame(x=xlim[1])) - summary(model1)$sigma,
+                      predict(model2, data.frame(x=xlim[1])) - sd(model2$residuals/model2$fitted.values)*predict(model2, data.frame(x=xlim[1]))),
+                  max(predict(model1, data.frame(x=xlim[2])) + summary(model1)$sigma,
+                      predict(model2, data.frame(x=xlim[2])) + sd(model2$residuals/model2$fitted.values)*predict(model2, data.frame(x=xlim[1]))))
 
-        # likelihood
-        y.like <- dnorm(x)
+        plot(x, y, xlim = xlim, ylim = ylim, pch = 4,  ylab = 'Area', xlab = 'Concentration')
 
-        # prior
-        y.prior <- dnorm(x, mean = mu, sd = s)
+        lines(x, m*x+c, col = 'green', lwd = 2)
 
-        # sampling distribution of the mean + posterior
-        if (n > 1) {
-            y.smpl <- dnorm(x, mean = 0, sd = 1/sqrt(n))
+        lines(x, predict(model1), col = rgb(1, 0, 0, 1))
+        lines(x, predict(model1) + summary(model1)$sigma, col = rgb(1, 0, 0, .5), lty = 2)
+        lines(x, predict(model1) - summary(model1)$sigma, col = rgb(1, 0, 0, .5), lty = 2)
+        abline(h = 0)
+        abline(v = 0)
 
-            sn   <- sqrt(1/(n/1^2 + 1/s^2))
-            mun <- (mu/s^2 + sum(observations)/1^2)*sn^2
-            y.post <- dnorm(x, mean = mun, sd = sn)
-
-            y.emp.smpl <- dnorm(x, mean = mean(observations), sd = sd(observations)/sqrt(n))
-        }
-
-        if (n > 1) {
-            y.lims <- c(.0, max(y.like, y.prior, y.smpl, y.post, y.emp.smpl))
-        } else {
-            y.lims <- c(.0, max(y.like, y.prior))
-        }
-        plot(x, y.prior, ylim = y.lims, col = 'skyblue', type = 'l',
-             las = 1, ylab = 'PDF', lty = 2)
-        if ('Likelihood' %in% input$selectPlots) {
-            lines(x, y.like, col = 'blue', lty = 2)
-        }
-        if (n > 1) {
-            if ('Posterior' %in% input$selectPlots) {
-                lines(x, y.post, col     = 'darkblue')
-            }
-            if ('Sampling Distribution' %in% input$selectPlots) {
-                lines(x, y.smpl, col     = 'green')
-            }
-            if ('Empirical Sampling Distribution' %in% input$selectPlots) {
-                lines(x, y.emp.smpl, col = 'turquoise')
-            }
-        }
-        sel <- input$selectPlots
-        sel['Prior'] <- 'Prior'
-        sel <- as.character(sel)
-        cols <- list('Prior'                             = 'skyblue',
-                     'Likelihood'                        = 'blue',
-                     'Posterior'                         = 'darkblue',
-                     'Sampling Distribution'             = 'green',
-                     'Empirical Sampling Distribution'   = 'turquoise')
-        legend('topright', legend = sel, col = as.character(cols[sel]), lty = 1)
+        lines(x, predict(model2), col = rgb(0, 0, 1, 1))
+        lines(x, predict(model2) + sd(model2$residuals/model2$fitted.values)*model2$fitted.values, col = rgb(0, 0, 1, .5), lty = 3)
+        lines(x, predict(model2) - sd(model2$residuals/model2$fitted.values)*model2$fitted.values, col = rgb(0, 0, 1, .5), lty = 3)
     })
+
+    ### YOUR DATA ########################################################
+
+    yourDataValidation <- reactive({
+        return(read.csv(input$yourDataFileValidation[1 , 'datapath']))
+    })
+
+    yourDataCalibration <- reactive({
+        return(read.csv(input$yourDataFileCalibration[1 , 'datapath']))
+    })
+
+    yourDataMeasurements <- reactive({
+        return(read.csv(input$yourDataFileMeasurements[1 , 'datapath']))
+    })
+
+    varNames <- reactive({
+        return(colnames(yourDataValidation()))
+    })
+
+    output$selectX <- renderUI({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        }
+        selectInput('selectValidationX',
+                    label    = h5('Independent Variable [X]:'),
+                    choices  = varNames(),
+                    selected = varNames()[1])
+    })
+
+    output$selectY <- renderUI({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        }
+        selectInput('selectValidationY',
+                    label   = h5('Dependent Variable [Y]:'),
+                    choices = varNames(),
+                    selected = varNames()[2])
+    })
+
+    yourDataValidationX <- reactive({
+        return(as.numeric(yourDataValidation()[ , input$selectValidationX]))
+    })
+
+    yourDataCalibrationX <- reactive({
+        return(as.numeric(yourDataCalibration()[ , input$selectValidationX]))
+    })
+
+    output$selectPlotRangeValidation <- renderUI({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        } else {
+            xlims <- c(.9*min(yourDataValidationX()), 1.01*max(yourDataValidationX()))
+            sliderInput('plotRangeValidation', h5('Select Plot Range:'),
+                        min = xlims[1], max = xlims[2], value = xlims,
+                        step = (xlims[2] - xlims[1])/1000)
+        }
+    })
+
+    output$selectPlotRangeCalibration <- renderUI({
+        if (is.null(input$yourDataFileCalibration)) {
+            return(NULL)
+        } else {
+            xlims <- c(.9*min(yourDataCalibrationX()),
+                       1.01*max(yourDataCalibrationX()))
+            sliderInput('plotRangeCalibration', h5('Select Plot Range:'),
+                        min = xlims[1], max = xlims[2], value = xlims,
+                        step = (xlims[2] - xlims[1])/1000)
+        }
+    })
+
+    yourDataValidationY <- reactive({
+        return(as.numeric(yourDataValidation()[ , input$selectValidationY]))
+    })
+
+    yourDataCalibrationY <- reactive({
+        return(as.numeric(yourDataCalibration()[ , input$selectValidationY]))
+    })
+
+    fittedPower <- reactive({
+        if (is.null(input$yourDataFileValidation)) {
+            return(1.0)
+        } else {
+            .F <- function(alpha, x, y) {
+
+                model <- lmWeighted(x, y, alpha)
+                absres <- abs(model$residuals/model$fitted.values**alpha)
+                return(cor(x, absres)**2)
+            }
+            alphaOpt <- optimize(.F, interval = c(.0, 2.0),
+                                 x = yourDataValidationX(),
+                                 y = yourDataValidationY())$minimum
+            return(alphaOpt)
+        }
+    })
+
+    output$alpha <- renderText({
+        fittedPower()
+    })
+
+    modelStandard <- reactive({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        } else {
+            x <- yourDataValidationX()
+            y <- yourDataValidationY()
+            model <- lm(y ~ x, data.frame(x = x, y = y))
+            return(model)
+        }
+    })
+
+    modelPower <- reactive({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        } else {
+            x <- yourDataValidationX()
+            y <- yourDataValidationY()
+            alpha  <- fittedPower()
+            model <- lmWeighted(x, y, alpha)
+            return(model)
+        }
+    })
+
+    output$plotValidation <- renderPlot({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        } else {
+            x <- yourDataValidationX()
+            y <- yourDataValidationY()
+
+            m0 <- modelStandard()
+
+            alpha  <- fittedPower()
+            m1 <- modelPower()
+
+            xlim <- input$plotRangeValidation
+
+            ylim <- c(min(predict(m0, data.frame(x=xlim[1])) - summary(m0)$sigma,
+                          predict(m1, data.frame(x=xlim[1])) - sd(m1$residuals/m1$fitted.values**alpha)*predict(m1, data.frame(x=xlim[1]))**alpha),
+                      max(predict(m0, data.frame(x=xlim[2])) + summary(m0)$sigma,
+                          predict(m1, data.frame(x=xlim[2])) + sd(m1$residuals/m1$fitted.values**alpha)*predict(m1, data.frame(x=xlim[1]))**alpha))
+
+            plot(x, y, xlim = xlim, ylim = ylim, pch = 4,  ylab = 'Y', xlab = 'X', las = 1)
+
+            lines(x, predict(m0), col = rgb(1, 0, 0, 1))
+            lines(x, predict(m0) + summary(m0)$sigma, col = rgb(1, 0, 0, .5), lty = 2)
+            lines(x, predict(m0) - summary(m0)$sigma, col = rgb(1, 0, 0, .5), lty = 2)
+            abline(h = 0)
+            abline(v = 0)
+
+            lines(x, predict(m1), col = rgb(0, 0, 1, 1))
+            lines(x, predict(m1) + sd(m1$residuals/m1$fitted.values**alpha)*m1$fitted.values**alpha, col = rgb(0, 0, 1, .5), lty = 3)
+            lines(x, predict(m1) - sd(m1$residuals/m1$fitted.values**alpha)*m1$fitted.values**alpha, col = rgb(0, 0, 1, .5), lty = 3)
+        }
+    })
+
+    output$plotCalibration <- renderPlot({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        } else {
+            x     <- yourDataCalibrationX()
+            y     <- yourDataCalibrationY()
+
+            m0    <- modelStandard() # only needed for error!
+            mm0   <- lm(y ~ x, data.frame(x = x, y = y))
+
+            alpha <- fittedPower()
+            m1    <- modelPower() # only needed for errors!
+            mm1   <- lmWeighted(x, y, alpha)
+
+            xlim  <- input$plotRangeCalibration
+
+            ylim  <- c(min(predict(mm0, data.frame(x=xlim[1])) - summary(m0)$sigma,
+                           predict(mm1, data.frame(x=xlim[1])) - sd(m1$residuals/m1$fitted.values**alpha)*predict(mm1, data.frame(x=xlim[1]))**alpha),
+                       max(predict(mm0, data.frame(x=xlim[2])) + summary(m0)$sigma,
+                           predict(mm1, data.frame(x=xlim[2])) + sd(m1$residuals/m1$fitted.values**alpha)*predict(mm1, data.frame(x=xlim[1]))**alpha))
+
+            plot(x, y, xlim = xlim, ylim = ylim, pch = 4,  ylab = 'Y', xlab = 'X', las = 1)
+
+            lines(x, predict(mm0), col = rgb(1, 0, 0, 1))
+            lines(x, predict(mm0) + summary(m0)$sigma, col = rgb(1, 0, 0, .5), lty = 2)
+            lines(x, predict(mm0) - summary(m0)$sigma, col = rgb(1, 0, 0, .5), lty = 2)
+            abline(h = 0)
+            abline(v = 0)
+
+            lines(x, predict(mm1), col = rgb(0, 0, 1, 1))
+            lines(x, predict(mm1) + sd(m1$residuals/m1$fitted.values**alpha)*mm1$fitted.values**alpha, col = rgb(0, 0, 1, .5), lty = 3)
+            lines(x, predict(mm1) - sd(m1$residuals/m1$fitted.values**alpha)*mm1$fitted.values**alpha, col = rgb(0, 0, 1, .5), lty = 3)
+        }
+    })
+
+    output$plotResidualsValidation <- renderPlot({
+        if (is.null(input$yourDataFileValidation)) {
+            return(NULL)
+        } else {
+            plot(yourDataValidationX(),
+                 abs(modelPower()$residuals/modelPower()$fitted.values**fittedPower()),
+                 ylab = 'Standardized Absolute Residuals',
+                 xlab = 'X',
+                 las  = 1)
+        }
+    })
+
+    measurements <- reactive({
+        x     <- yourDataCalibrationX()
+        y     <- yourDataCalibrationY()
+        alpha <- fittedPower()
+        m1    <- modelPower()
+        mm1   <- lmWeighted(x, y, alpha)
+        yM <- yourDataMeasurements()[ , input$selectValidationY]
+        xM <- (yM - mm1$coefficients[1])/mm1$coefficients[2]
+        stdErr <- sd(m1$residuals/m1$fitted.values**alpha)*yM**alpha/mm1$coefficients[2]
+
+        return(list(yM = yM, xM = xM, stdErr = stdErr))
+    })
+
+    output$view <- renderTable({
+        tmp <- measurements()
+        data.frame(Y=tmp$yM, X = tmp$xM, Std=tmp$stdErr)
+    })
+
 })
